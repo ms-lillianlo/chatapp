@@ -1,79 +1,124 @@
-$(function(){
+$(function() {
+  // Get handle to the chat div
+  var $chatWindow = $('#messages');
 
-	// page has loaded
-	// need to pull the old coffee orders from localStorage
-	var orders = [];
-	var oldOrdersJSON = localStorage.getItem("coffeeOrders");
-	var oldOrders = JSON.parse(oldOrdersJSON);
+  // Our interface to the Chat service
+  var chatClient;
 
-	if (oldOrders) {
-		orders = oldOrders;
-	}
-	
+  // A handle to the "general" chat channel - the one and only channel we
+  // will have in this sample app
+  var generalChannel;
 
-	// show the old orders to the screen
-	var oldOrdersHTML = "";
-	orders.forEach(function(currentOrder){
-		oldOrdersHTML += renderCoffeeOrder(currentOrder);
-	});
-	$('#orderList').append(oldOrdersHTML);
+  // The server will assign the client a random username - store that value
+  // here
+  var username;
 
-	function renderCoffeeOrder(order) {
-		var finalHTML = '<div class="order" data-id="'+ order.id +'">';
+  // Helper function to print info messages to the chat window
+  function print(infoMessage, asHtml) {
+    var $msg = $('<div class="info">');
+    if (asHtml) {
+      $msg.html(infoMessage);
+    } else {
+      $msg.text(infoMessage);
+    }
+    $chatWindow.append($msg);
+  }
 
-		finalHTML += '<span>'+ order.coffeeOrder +' </span>';
-		finalHTML += '<span>'+ order.email +' </span>';
-		finalHTML += '<span>'+ order.size +' </span>';
-		finalHTML += '<span>'+ order.flavorShot +' </span>';
-		finalHTML += '<span>'+ order.strength +' </span>';
-		finalHTML += '<button class="delete">X</button>';
-		finalHTML += '</div>';
+  // Helper function to print chat message to the chat window
+  function printMessage(fromUser, message) {
+    var $user = $('<span class="username">').text(fromUser + ':');
+    if (fromUser === username) {
+      $user.addClass('me');
+    }
+    var $message = $('<span class="message">').text(message);
+    var $container = $('<div class="message-container">');
+    $container.append($user).append($message);
+    $chatWindow.append($container);
+    $chatWindow.scrollTop($chatWindow[0].scrollHeight);
+  }
 
-		return finalHTML;
-	}
+  // Alert the user they have been assigned a random username
+  print('Logging in...');
 
-	$('form').submit(function(e){
-		e.preventDefault();
-
-		var currentOrder = {
-			id: new Date(),
-			coffeeOrder: $('#coffeeOrder').val(),
-			email: $('#emailInput').val(),
-			size: $('input:checked').val(),
-			flavorShot: $('#flavorShot').val(),
-			strength:$('#strengthLevel').val()
-		};
-
-		orders.push(currentOrder);
-
-		// Show the new order the the screen
-		var renderedHTML = renderCoffeeOrder(currentOrder);	
-		$('#orderList').append(renderedHTML);
-
-		// Save the order list to localStorage
-		var ordersJSON = JSON.stringify(orders);
-		localStorage.setItem("coffeeOrders", ordersJSON);
-
-	});
+  // Get an access token for the current user, passing a username (identity)
+  // and a device ID - for browser-based apps, we'll always just use the
+  // value "browser"
+  $.getJSON('/token', {
+    device: 'browser'
+  }, function(data) {
 
 
-	$('#orderList').on('click', '.delete', function(){
-		// Remove the right order object from orders
-		var idToDelete = $(this).parent().data("id");
+    // Initialize the Chat client
+    Twilio.Chat.Client.create(data.token).then(client => {
+      console.log('Created chat client');
+      chatClient = client;
+      chatClient.getSubscribedChannels().then(createOrJoinGeneralChannel);
 
-		// make sure the order gets removed from our orders array
-		orders = orders.filter(function(currentOrder){
-			return currentOrder.id != idToDelete;
-		});
+    // Alert the user they have been assigned a random username
+    username = data.identity;
+    print('You have been assigned a random username of: '
+    + '<span class="me">' + username + '</span>', true);
 
-		// make sure the order gets removed from localStorage too
-		var ordersJSON = JSON.stringify(orders);
-		localStorage.setItem("coffeeOrders", ordersJSON);
+    }).catch(error => {
+      console.error(error);
+      print('There was an error creating the chat client:<br/>' + error, true);
+      print('Please check your .env file.', false);
+    });
+  });
 
-		// Remove the order from the screen
-		$(this).parent().remove();
+  function createOrJoinGeneralChannel() {
+    // Get the general chat channel, which is where all the messages are
+    // sent in this simple application
+    print('Attempting to join "general" chat channel...');
+    chatClient.getChannelByUniqueName('general')
+    .then(function(channel) {
+      generalChannel = channel;
+      console.log('Found general channel:');
+      console.log(generalChannel);
+      setupChannel();
+    }).catch(function() {
+      // If it doesn't exist, let's create it
+      console.log('Creating general channel');
+      chatClient.createChannel({
+        uniqueName: 'general',
+        friendlyName: 'General Chat Channel'
+      }).then(function(channel) {
+        console.log('Created general channel:');
+        console.log(channel);
+        generalChannel = channel;
+        setupChannel();
+      }).catch(function(channel) {
+        console.log('Channel could not be created:');
+        console.log(channel);
+      });
+    });
+  }
 
-		
-	});
+  // Set up channel after it has been found
+  function setupChannel() {
+    // Join the general channel
+    generalChannel.join().then(function(channel) {
+      print('Joined channel as '
+      + '<span class="me">' + username + '</span>.', true);
+    });
 
+    // Listen for new messages sent to the channel
+    generalChannel.on('messageAdded', function(message) {
+      printMessage(message.author, message.body);
+    });
+  }
+
+  // Send a new message to the general channel
+  var $input = $('#chat-input');
+  $input.on('keydown', function(e) {
+
+    if (e.keyCode == 13) {
+      if (generalChannel === undefined) {
+        print('The Chat Service is not configured. Please check your .env file.', false);
+        return;
+      }
+      generalChannel.sendMessage($input.val())
+      $input.val('');
+    }
+  });
 });
